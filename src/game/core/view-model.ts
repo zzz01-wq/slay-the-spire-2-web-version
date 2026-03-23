@@ -177,6 +177,7 @@ function createCombatPanel(state: GameState): Panel {
     title: `Combat Turn ${combat.turn}`,
     lines: [
       `Energy ${combat.player.energy}/${combat.player.maxEnergy} | Strength ${combat.player.strength + combat.player.temporaryStrength} | Block ${combat.player.block} | Vulnerable ${combat.player.vulnerable} | Weak ${combat.player.weak} | Exhausted this turn ${combat.exhaustedThisTurn}`,
+      `Powers: Feel No Pain ${combat.player.feelNoPainBlock}, Dark Embrace ${combat.player.darkEmbraceDraw}, Rupture ${combat.player.ruptureStrength}, Demon Form ${combat.player.demonFormStrength}, Juggernaut ${combat.player.juggernautDamage}, Inferno ${combat.player.infernoDamage}, Crimson Mantle ${combat.player.crimsonMantleBlock}`,
       ...combat.enemies.map((enemy) => {
         const intent =
           enemy.currentHp > 0
@@ -242,9 +243,12 @@ function getPendingChoiceActions(state: GameState): ActionButton[] {
   return [
     ...choice.options.map((card) => ({
       id: `choice-${card.instanceId}`,
-      label: choice.kind === 'upgrade-hand'
-        ? `Upgrade ${formatCardLabel(card)}`
-        : `Take ${formatCardLabel(card)}`,
+      label:
+        choice.kind === 'upgrade-hand'
+          ? `Upgrade ${formatCardLabel(card)}`
+          : choice.kind === 'discard-to-draw'
+            ? `Take ${formatCardLabel(card)}`
+            : `Exhaust ${formatCardLabel(card)}`,
       action: { type: 'RESOLVE_PENDING_CHOICE' as const, cardInstanceId: card.instanceId },
     })),
     {
@@ -263,11 +267,18 @@ function getChoicePanel(state: GameState): Panel | null {
 
   return {
     id: 'choice',
-    title: choice.kind === 'upgrade-hand' ? 'Choose a Hand Card' : 'Choose a Discard Card',
+    title:
+      choice.kind === 'upgrade-hand'
+        ? 'Choose a Hand Card'
+        : choice.kind === 'discard-to-draw'
+          ? 'Choose a Discard Card'
+          : 'Choose a Card to Exhaust',
     lines: [
       choice.kind === 'upgrade-hand'
         ? `${choice.sourceCardName}: choose a card in your hand to upgrade for this combat.`
-        : `${choice.sourceCardName}: choose a card from your discard pile to place on top of your draw pile.`,
+        : choice.kind === 'discard-to-draw'
+          ? `${choice.sourceCardName}: choose a card from your discard pile to place on top of your draw pile.`
+          : `${choice.sourceCardName}: choose a card in your hand to exhaust.`,
       ...choice.options.map((card) => formatCardLabel(card)),
     ],
   }

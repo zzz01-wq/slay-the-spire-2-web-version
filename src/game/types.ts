@@ -21,6 +21,9 @@ export type CardId =
   | 'body-slam'
   | 'breakthrough'
   | 'cinder'
+  | 'crimson-mantle'
+  | 'dark-embrace'
+  | 'demon-form'
   | 'entrench'
   | 'evil-eye'
   | 'expect-a-fight'
@@ -31,12 +34,15 @@ export type CardId =
   | 'flame-barrier'
   | 'havoc'
   | 'headbutt'
+  | 'inferno'
   | 'inflame'
   | 'iron-wave'
   | 'impervious'
+  | 'juggernaut'
   | 'molten-fist'
   | 'perfected-strike'
   | 'pommel-strike'
+  | 'rupture'
   | 'setup-strike'
   | 'shrug-it-off'
   | 'sword-boomerang'
@@ -49,7 +55,7 @@ export type CardId =
   | 'bully'
   | 'burning-pact'
 export type CardType = 'attack' | 'skill' | 'power'
-export type CardRarity = 'starter' | 'common' | 'uncommon'
+export type CardRarity = 'starter' | 'common' | 'uncommon' | 'rare'
 export type RelicId = 'burning-blood'
 export type EnemyId =
   | 'cultist'
@@ -87,7 +93,13 @@ export type CardEffect = {
   gainEnergy?: number
   gainEnergyPerAttackInHand?: number
   gainStrength?: number
+  gainStrengthPerHpLossFromCard?: number
+  gainStrengthPerTurn?: number
   feelNoPainBlock?: number
+  darkEmbraceDraw?: number
+  juggernautDamage?: number
+  infernoDamage?: number
+  crimsonMantleBlock?: number
   upgradeChosenHandCard?: boolean
   upgradeAllHand?: boolean
   moveDiscardToDrawTop?: boolean
@@ -192,6 +204,12 @@ export type PlayerCombatState = {
   weak: number
   retaliateDamage: number
   feelNoPainBlock: number
+  darkEmbraceDraw: number
+  ruptureStrength: number
+  demonFormStrength: number
+  juggernautDamage: number
+  infernoDamage: number
+  crimsonMantleBlock: number
 }
 
 export type CombatState = {
@@ -199,6 +217,7 @@ export type CombatState = {
   floor: number
   turn: number
   exhaustedThisTurn: number
+  attacksPlayedThisTurn: number
   player: PlayerCombatState
   hand: CardInstance[]
   drawPile: CardInstance[]

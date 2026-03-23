@@ -194,6 +194,11 @@ function playCard(
 
   const logs: LogEntry[] = [createLogEntry(`You play ${definition.name}.`, 'neutral')]
   const effect = card.upgraded ? definition.upgradedEffect : definition.effect
+
+  if (definition.type === 'attack') {
+    combat.attacksPlayedThisTurn += 1
+  }
+
   const pendingChoice = resolveCardEffect(run, combat, card, definition, effect, target, logs)
 
   if (effect.exhaustSelf) {
@@ -353,6 +358,7 @@ function endTurn(state: GameState): GameState {
 
   combat.discardPile.push(...combat.hand)
   combat.hand = []
+  combat.attacksPlayedThisTurn = 0
   combat.player.temporaryStrength = 0
   combat.player.weak = tickDown(combat.player.weak)
   combat.player.vulnerable = tickDown(combat.player.vulnerable)
@@ -464,6 +470,8 @@ function endTurn(state: GameState): GameState {
   combat.turn += 1
   combat.player.block = 0
   combat.player.energy = combat.player.maxEnergy
+
+  handleStartOfTurnEffects(run, combat, logs)
 
   const drawResult = drawCards(run, combat, DRAW_PER_TURN)
   logs.push(createLogEntry(`Turn ${combat.turn} begins.`, 'neutral'))
@@ -625,6 +633,7 @@ function startCombat(state: GameState, node: MapNode): GameState {
     floor: node.floor,
     turn: 1,
     exhaustedThisTurn: 0,
+    attacksPlayedThisTurn: 0,
     player: {
       energy: 3,
       maxEnergy: 3,
@@ -635,6 +644,12 @@ function startCombat(state: GameState, node: MapNode): GameState {
       weak: 0,
       retaliateDamage: 0,
       feelNoPainBlock: 0,
+      darkEmbraceDraw: 0,
+      ruptureStrength: 0,
+      demonFormStrength: 0,
+      juggernautDamage: 0,
+      infernoDamage: 0,
+      crimsonMantleBlock: 0,
     },
     hand: [],
     drawPile: [],
@@ -871,8 +886,7 @@ function resolveCardEffect(
   let fatalDamageResolved = false
 
   if (effect.loseHpSelf) {
-    run.currentHp = Math.max(0, run.currentHp - effect.loseHpSelf)
-    logs.push(createLogEntry(`You lose ${effect.loseHpSelf} HP.`, 'bad'))
+    losePlayerHp(run, combat, effect.loseHpSelf, logs, true)
   }
 
   if (effect.gainEnergy) {
@@ -890,7 +904,7 @@ function resolveCardEffect(
   }
 
   if (effect.block) {
-    combat.player.block += effect.block
+    addPlayerBlock(combat, effect.block, run, logs)
     logs.push(createLogEntry(`You gain ${effect.block} Block.`, 'good'))
   }
 
@@ -969,6 +983,26 @@ function resolveCardEffect(
   if (effect.gainStrength) {
     combat.player.strength += effect.gainStrength
     logs.push(createLogEntry(`You gain ${effect.gainStrength} Strength.`, 'good'))
+  }
+
+  if (effect.gainStrengthPerHpLossFromCard) {
+    combat.player.ruptureStrength = effect.gainStrengthPerHpLossFromCard
+    logs.push(
+      createLogEntry(
+        `Rupture will grant ${effect.gainStrengthPerHpLossFromCard} Strength when you lose HP from a card.`,
+        'good',
+      ),
+    )
+  }
+
+  if (effect.gainStrengthPerTurn) {
+    combat.player.demonFormStrength = effect.gainStrengthPerTurn
+    logs.push(
+      createLogEntry(
+        `Demon Form will grant ${effect.gainStrengthPerTurn} Strength at the start of each turn.`,
+        'good',
+      ),
+    )
   }
 
   if (effect.gainEnemyStrength && target) {
@@ -1076,6 +1110,46 @@ function resolveCardEffect(
     logs.push(
       createLogEntry(
         `Feel No Pain will grant ${effect.feelNoPainBlock} Block whenever a card is Exhausted.`,
+        'good',
+      ),
+    )
+  }
+
+  if (effect.darkEmbraceDraw) {
+    combat.player.darkEmbraceDraw = effect.darkEmbraceDraw
+    logs.push(
+      createLogEntry(
+        `Dark Embrace will draw ${effect.darkEmbraceDraw} card${effect.darkEmbraceDraw > 1 ? 's' : ''} when a card is Exhausted.`,
+        'good',
+      ),
+    )
+  }
+
+  if (effect.juggernautDamage) {
+    combat.player.juggernautDamage = effect.juggernautDamage
+    logs.push(
+      createLogEntry(
+        `Juggernaut will deal ${effect.juggernautDamage} damage when you gain Block.`,
+        'good',
+      ),
+    )
+  }
+
+  if (effect.infernoDamage) {
+    combat.player.infernoDamage = effect.infernoDamage
+    logs.push(
+      createLogEntry(
+        `Inferno will burn all enemies for ${effect.infernoDamage} whenever you lose HP on your turn.`,
+        'good',
+      ),
+    )
+  }
+
+  if (effect.crimsonMantleBlock) {
+    combat.player.crimsonMantleBlock = effect.crimsonMantleBlock
+    logs.push(
+      createLogEntry(
+        `Crimson Mantle will cost 1 HP and grant ${effect.crimsonMantleBlock} Block at the start of each turn.`,
         'good',
       ),
     )
@@ -1384,7 +1458,118 @@ function moveCardToExhaust(combat: CombatState, card: CardInstance): void {
   combat.exhaustPile.push(card)
   combat.exhaustedThisTurn += 1
   if (combat.player.feelNoPainBlock > 0) {
-    combat.player.block += combat.player.feelNoPainBlock
+    addPlayerBlock(combat, combat.player.feelNoPainBlock)
+  }
+  triggerDarkEmbrace(combat)
+}
+
+function handleStartOfTurnEffects(
+  run: RunState,
+  combat: CombatState,
+  logs: LogEntry[],
+): void {
+  if (combat.player.crimsonMantleBlock > 0) {
+    losePlayerHp(run, combat, 1, logs, false)
+    addPlayerBlock(combat, combat.player.crimsonMantleBlock, run, logs)
+    logs.push(
+      createLogEntry(
+        `Crimson Mantle grants ${combat.player.crimsonMantleBlock} Block.`,
+        'good',
+      ),
+    )
+  }
+
+  if (combat.player.demonFormStrength > 0) {
+    combat.player.strength += combat.player.demonFormStrength
+    logs.push(
+      createLogEntry(
+        `Demon Form grants ${combat.player.demonFormStrength} Strength.`,
+        'good',
+      ),
+    )
+  }
+
+  if (combat.player.infernoDamage > 0) {
+    losePlayerHp(run, combat, 1, logs, false)
+  }
+}
+
+function losePlayerHp(
+  run: RunState,
+  combat: CombatState,
+  amount: number,
+  logs: LogEntry[],
+  fromCard: boolean,
+): void {
+  run.currentHp = Math.max(0, run.currentHp - amount)
+  logs.push(createLogEntry(`You lose ${amount} HP.`, 'bad'))
+
+  if (fromCard && combat.player.ruptureStrength > 0) {
+    combat.player.strength += combat.player.ruptureStrength
+    logs.push(
+      createLogEntry(
+        `Rupture grants ${combat.player.ruptureStrength} Strength.`,
+        'good',
+      ),
+    )
+  }
+
+  if (combat.player.infernoDamage > 0) {
+    for (const enemy of combat.enemies.filter((candidate) => candidate.currentHp > 0)) {
+      const dealt = dealDamageToEnemy(enemy, combat.player.infernoDamage)
+      logs.push(
+        createLogEntry(
+          `Inferno burns ${enemy.name} for ${dealt} damage.`,
+          dealt > 0 ? 'good' : 'neutral',
+        ),
+      )
+      resolveEnemyAfterHit(combat, enemy, logs)
+    }
+  }
+}
+
+function addPlayerBlock(
+  combat: CombatState,
+  amount: number,
+  run?: RunState,
+  logs?: LogEntry[],
+): void {
+  combat.player.block += amount
+
+  if (combat.player.juggernautDamage > 0 && run && logs) {
+    const target = pickRandomLivingEnemy(run, combat)
+    if (target) {
+      const dealt = dealDamageToEnemy(target, combat.player.juggernautDamage)
+      logs.push(
+        createLogEntry(
+          `Juggernaut slams ${target.name} for ${dealt} damage.`,
+          dealt > 0 ? 'good' : 'neutral',
+        ),
+      )
+      resolveEnemyAfterHit(combat, target, logs)
+    }
+  }
+}
+
+function triggerDarkEmbrace(combat: CombatState): void {
+  if (combat.player.darkEmbraceDraw <= 0) {
+    return
+  }
+
+  for (let index = 0; index < combat.player.darkEmbraceDraw; index += 1) {
+    if (combat.drawPile.length === 0 && combat.discardPile.length === 0) {
+      break
+    }
+
+    if (combat.drawPile.length === 0) {
+      combat.drawPile = [...combat.discardPile]
+      combat.discardPile = []
+    }
+
+    const drawn = combat.drawPile.shift()
+    if (drawn) {
+      combat.hand.push(drawn)
+    }
   }
 }
 
