@@ -12,17 +12,21 @@ import type {
   CardEffect,
   CardId,
   CardInstance,
+  CombatTrigger,
   CombatState,
   EncounterDefinition,
   EnemyId,
+  EnemyPowerName,
   EnemyState,
   GameAction,
   GameState,
   LogEntry,
   MapNode,
   PendingChoice,
+  PlayerPowerName,
   RewardState,
   RunState,
+  StatusName,
   Tone,
 } from '../types.ts'
 
@@ -31,6 +35,132 @@ const DRAW_PER_TURN = 5
 
 let cardSequence = 0
 let logSequence = 0
+
+type TriggerContext = {
+  source: 'card' | 'power' | 'enemy' | 'system'
+  amount?: number
+  duringPlayerTurn?: boolean
+}
+
+type PlayerTriggerHandler = (args: {
+  run: RunState
+  combat: CombatState
+  logs: LogEntry[]
+  value: number
+  context: TriggerContext
+}) => void
+
+type PlayerPowerConfig = {
+  trigger?: Partial<Record<CombatTrigger, PlayerTriggerHandler>>
+}
+
+const STATUS_KEYS: StatusName[] = ['vulnerable', 'weak']
+const ENEMY_POWER_KEYS: EnemyPowerName[] = ['strength', 'ritual']
+const PLAYER_POWER_CONFIG: Record<PlayerPowerName, PlayerPowerConfig> = {
+  strength: {},
+  temporaryStrength: {},
+  retaliateDamage: {},
+  feelNoPainBlock: {
+    trigger: {
+      cardExhausted: ({ run, combat, logs, value }) => {
+        addPlayerBlock(combat, value, run, logs, 'power')
+        logs.push(createLogEntry(`Feel No Pain grants ${value} Block.`, 'good'))
+      },
+    },
+  },
+  darkEmbraceDraw: {
+    trigger: {
+      cardExhausted: ({ run, combat, logs, value }) => {
+        const drawResult = drawCards(run, combat, value)
+        run.rngState = drawResult.run.rngState
+        if (drawResult.drawn > 0) {
+          logs.push(
+            createLogEntry(
+              `Dark Embrace draws ${drawResult.drawn} card${drawResult.drawn > 1 ? 's' : ''}.`,
+              'good',
+            ),
+          )
+        }
+      },
+    },
+  },
+  ruptureStrength: {
+    trigger: {
+      loseHp: ({ combat, logs, value, context }) => {
+        if (context.source !== 'card') {
+          return
+        }
+
+        addPlayerPower(combat, 'strength', value)
+        logs.push(createLogEntry(`Rupture grants ${value} Strength.`, 'good'))
+      },
+    },
+  },
+  demonFormStrength: {
+    trigger: {
+      turnStart: ({ combat, logs, value }) => {
+        addPlayerPower(combat, 'strength', value)
+        logs.push(createLogEntry(`Demon Form grants ${value} Strength.`, 'good'))
+      },
+    },
+  },
+  juggernautDamage: {
+    trigger: {
+      gainBlock: ({ run, combat, logs, value, context }) => {
+        if ((context.amount ?? 0) <= 0) {
+          return
+        }
+
+        const target = pickRandomLivingEnemy(run, combat)
+        if (!target) {
+          return
+        }
+
+        const dealt = dealDamageToEnemy(target, value)
+        logs.push(
+          createLogEntry(
+            `Juggernaut slams ${target.name} for ${dealt} damage.`,
+            dealt > 0 ? 'good' : 'neutral',
+          ),
+        )
+        resolveEnemyAfterHit(combat, target, logs)
+      },
+    },
+  },
+  infernoDamage: {
+    trigger: {
+      turnStart: ({ run, combat, logs }) => {
+        losePlayerHp(run, combat, 1, logs, false)
+      },
+      loseHp: ({ combat, logs, value, context }) => {
+        if (value <= 0 || !context.duringPlayerTurn) {
+          return
+        }
+
+        for (const enemy of combat.enemies.filter((candidate) => candidate.currentHp > 0)) {
+          const dealt = dealDamageToEnemy(enemy, value)
+          logs.push(
+            createLogEntry(
+              `Inferno burns ${enemy.name} for ${dealt} damage.`,
+              dealt > 0 ? 'good' : 'neutral',
+            ),
+          )
+          resolveEnemyAfterHit(combat, enemy, logs)
+        }
+      },
+    },
+  },
+  crimsonMantleBlock: {
+    trigger: {
+      turnStart: ({ run, combat, logs, value }) => {
+        losePlayerHp(run, combat, 1, logs, false)
+        addPlayerBlock(combat, value, run, logs, 'power')
+        logs.push(createLogEntry(`Crimson Mantle grants ${value} Block.`, 'good'))
+      },
+    },
+  },
+}
+const PLAYER_POWER_KEYS = Object.keys(PLAYER_POWER_CONFIG) as PlayerPowerName[]
 
 export function createInitialGameState(): GameState {
   return {
@@ -202,7 +332,7 @@ function playCard(
   const pendingChoice = resolveCardEffect(run, combat, card, definition, effect, target, logs)
 
   if (effect.exhaustSelf) {
-    moveCardToExhaust(combat, card)
+    moveCardToExhaust(run, combat, card, logs)
     logs.push(createLogEntry(`${definition.name} is exhausted.`, 'neutral'))
   } else {
     combat.discardPile.push(card)
@@ -294,7 +424,7 @@ function resolvePendingChoice(state: GameState, cardInstanceId: string): GameSta
     }
 
     const [selected] = combat.hand.splice(index, 1)
-    moveCardToExhaust(combat, selected)
+    moveCardToExhaust(run, combat, selected, logs)
     logs.push(
       createLogEntry(`${cardDefinitions[selected.cardId].name} is exhausted.`, 'neutral'),
     )
@@ -359,9 +489,8 @@ function endTurn(state: GameState): GameState {
   combat.discardPile.push(...combat.hand)
   combat.hand = []
   combat.attacksPlayedThisTurn = 0
-  combat.player.temporaryStrength = 0
-  combat.player.weak = tickDown(combat.player.weak)
-  combat.player.vulnerable = tickDown(combat.player.vulnerable)
+  setPlayerPower(combat, 'temporaryStrength', 0)
+  tickEntityStatuses(combat.player, STATUS_KEYS)
   combat.exhaustedThisTurn = 0
 
   for (const enemy of combat.enemies) {
@@ -378,21 +507,21 @@ function endTurn(state: GameState): GameState {
     }
 
     if (intent.gainStrength) {
-      enemy.strength += intent.gainStrength
+      addEnemyPower(enemy, 'strength', intent.gainStrength)
       logs.push(
         createLogEntry(`${enemy.name} gains ${intent.gainStrength} Strength.`, 'bad'),
       )
     }
 
     if (intent.gainRitual) {
-      enemy.ritual += intent.gainRitual
+      addEnemyPower(enemy, 'ritual', intent.gainRitual)
       logs.push(
         createLogEntry(`${enemy.name} gains ${intent.gainRitual} Ritual.`, 'bad'),
       )
     }
 
     if (intent.damage) {
-      const dealt = dealDamageToPlayer(run, combat, enemy, intent.damage)
+      const dealt = dealDamageToPlayer(run, combat, enemy, intent.damage, logs)
       logs.push(
         createLogEntry(
           `${enemy.name} attacks for ${dealt} damage.`,
@@ -413,7 +542,7 @@ function endTurn(state: GameState): GameState {
     }
 
     if (intent.applyVulnerable) {
-      combat.player.vulnerable += intent.applyVulnerable
+      addPlayerStatus(combat, 'vulnerable', intent.applyVulnerable)
       logs.push(
         createLogEntry(
           `${enemy.name} applies ${intent.applyVulnerable} Vulnerable.`,
@@ -423,24 +552,23 @@ function endTurn(state: GameState): GameState {
     }
 
     if (intent.applyWeak) {
-      combat.player.weak += intent.applyWeak
+      addPlayerStatus(combat, 'weak', intent.applyWeak)
       logs.push(
         createLogEntry(`${enemy.name} applies ${intent.applyWeak} Weak.`, 'bad'),
       )
     }
 
-    if (enemy.ritual > 0) {
-      enemy.strength += enemy.ritual
+    if (getEnemyPower(enemy, 'ritual') > 0) {
+      addEnemyPower(enemy, 'strength', getEnemyPower(enemy, 'ritual'))
       logs.push(
         createLogEntry(
-          `${enemy.name}'s Ritual grants ${enemy.ritual} Strength.`,
+          `${enemy.name}'s Ritual grants ${getEnemyPower(enemy, 'ritual')} Strength.`,
           'bad',
         ),
       )
     }
 
-    enemy.vulnerable = tickDown(enemy.vulnerable)
-    enemy.weak = tickDown(enemy.weak)
+    tickEntityStatuses(enemy, STATUS_KEYS)
     enemy.intentIndex =
       (enemy.intentIndex + 1) %
       enemyDefinitions[enemy.definitionId].intentCycle.length
@@ -914,7 +1042,7 @@ function resolveCardEffect(
   }
 
   if (effect.bonusBlockIfExhaustedThisTurn && combat.exhaustedThisTurn > 0) {
-    combat.player.block += effect.bonusBlockIfExhaustedThisTurn
+    addPlayerBlock(combat, effect.bonusBlockIfExhaustedThisTurn, run, logs)
     logs.push(
       createLogEntry(
         `You gain ${effect.bonusBlockIfExhaustedThisTurn} bonus Block.`,
@@ -942,7 +1070,7 @@ function resolveCardEffect(
   }
 
   if (effect.applyVulnerable && target) {
-    target.vulnerable += effect.applyVulnerable
+    addEnemyStatus(target, 'vulnerable', effect.applyVulnerable)
     logs.push(
       createLogEntry(`${target.name} gains ${effect.applyVulnerable} Vulnerable.`, 'good'),
     )
@@ -950,7 +1078,7 @@ function resolveCardEffect(
 
   if (effect.applyVulnerableAll) {
     for (const enemy of combat.enemies.filter((candidate) => candidate.currentHp > 0)) {
-      enemy.vulnerable += effect.applyVulnerableAll
+      addEnemyStatus(enemy, 'vulnerable', effect.applyVulnerableAll)
       logs.push(
         createLogEntry(
           `${enemy.name} gains ${effect.applyVulnerableAll} Vulnerable.`,
@@ -961,17 +1089,17 @@ function resolveCardEffect(
   }
 
   if (effect.applyWeak && target) {
-    target.weak += effect.applyWeak
+    addEnemyStatus(target, 'weak', effect.applyWeak)
     logs.push(createLogEntry(`${target.name} gains ${effect.applyWeak} Weak.`, 'good'))
   }
 
   if (effect.doubleEnemyVulnerable && target) {
-    target.vulnerable *= 2
+    multiplyEnemyStatus(target, 'vulnerable', 2)
     logs.push(createLogEntry(`${target.name}'s Vulnerable is doubled.`, 'good'))
   }
 
   if (effect.gainTemporaryStrength) {
-    combat.player.temporaryStrength += effect.gainTemporaryStrength
+    addPlayerPower(combat, 'temporaryStrength', effect.gainTemporaryStrength)
     logs.push(
       createLogEntry(
         `You gain ${effect.gainTemporaryStrength} Strength this turn.`,
@@ -981,12 +1109,12 @@ function resolveCardEffect(
   }
 
   if (effect.gainStrength) {
-    combat.player.strength += effect.gainStrength
+    addPlayerPower(combat, 'strength', effect.gainStrength)
     logs.push(createLogEntry(`You gain ${effect.gainStrength} Strength.`, 'good'))
   }
 
   if (effect.gainStrengthPerHpLossFromCard) {
-    combat.player.ruptureStrength = effect.gainStrengthPerHpLossFromCard
+    setPlayerPower(combat, 'ruptureStrength', effect.gainStrengthPerHpLossFromCard)
     logs.push(
       createLogEntry(
         `Rupture will grant ${effect.gainStrengthPerHpLossFromCard} Strength when you lose HP from a card.`,
@@ -996,7 +1124,7 @@ function resolveCardEffect(
   }
 
   if (effect.gainStrengthPerTurn) {
-    combat.player.demonFormStrength = effect.gainStrengthPerTurn
+    setPlayerPower(combat, 'demonFormStrength', effect.gainStrengthPerTurn)
     logs.push(
       createLogEntry(
         `Demon Form will grant ${effect.gainStrengthPerTurn} Strength at the start of each turn.`,
@@ -1006,7 +1134,7 @@ function resolveCardEffect(
   }
 
   if (effect.gainEnemyStrength && target) {
-    target.strength += effect.gainEnemyStrength
+    addEnemyPower(target, 'strength', effect.gainEnemyStrength)
     logs.push(
       createLogEntry(
         `${target.name} gains ${effect.gainEnemyStrength} Strength.`,
@@ -1034,7 +1162,7 @@ function resolveCardEffect(
   }
 
   if (effect.exhaustTopDrawPile) {
-    exhaustTopDrawPile(combat, effect.exhaustTopDrawPile, logs)
+    exhaustTopDrawPile(run, combat, effect.exhaustTopDrawPile, logs)
   }
 
   if (effect.playTopDrawPileAndExhaust) {
@@ -1045,7 +1173,7 @@ function resolveCardEffect(
     const roll = randomIndex(run.rngState, combat.hand.length)
     run.rngState = roll.next
     const [randomCard] = combat.hand.splice(roll.index, 1)
-    moveCardToExhaust(combat, randomCard)
+    moveCardToExhaust(run, combat, randomCard, logs)
     logs.push(
       createLogEntry(
         `${cardDefinitions[randomCard.cardId].name} is randomly exhausted from your hand.`,
@@ -1070,7 +1198,7 @@ function resolveCardEffect(
     const cardsToExhaust = [...combat.hand]
     combat.hand = []
     for (const exhaustedCard of cardsToExhaust) {
-      moveCardToExhaust(combat, exhaustedCard)
+      moveCardToExhaust(run, combat, exhaustedCard, logs)
       logs.push(
         createLogEntry(`${cardDefinitions[exhaustedCard.cardId].name} is exhausted.`, 'neutral'),
       )
@@ -1096,7 +1224,7 @@ function resolveCardEffect(
   }
 
   if (effect.retaliateDamageThisTurn) {
-    combat.player.retaliateDamage += effect.retaliateDamageThisTurn
+    addPlayerPower(combat, 'retaliateDamage', effect.retaliateDamageThisTurn)
     logs.push(
       createLogEntry(
         `You will retaliate for ${effect.retaliateDamageThisTurn} damage this turn.`,
@@ -1106,7 +1234,7 @@ function resolveCardEffect(
   }
 
   if (effect.feelNoPainBlock) {
-    combat.player.feelNoPainBlock = effect.feelNoPainBlock
+    setPlayerPower(combat, 'feelNoPainBlock', effect.feelNoPainBlock)
     logs.push(
       createLogEntry(
         `Feel No Pain will grant ${effect.feelNoPainBlock} Block whenever a card is Exhausted.`,
@@ -1116,7 +1244,7 @@ function resolveCardEffect(
   }
 
   if (effect.darkEmbraceDraw) {
-    combat.player.darkEmbraceDraw = effect.darkEmbraceDraw
+    setPlayerPower(combat, 'darkEmbraceDraw', effect.darkEmbraceDraw)
     logs.push(
       createLogEntry(
         `Dark Embrace will draw ${effect.darkEmbraceDraw} card${effect.darkEmbraceDraw > 1 ? 's' : ''} when a card is Exhausted.`,
@@ -1126,7 +1254,7 @@ function resolveCardEffect(
   }
 
   if (effect.juggernautDamage) {
-    combat.player.juggernautDamage = effect.juggernautDamage
+    setPlayerPower(combat, 'juggernautDamage', effect.juggernautDamage)
     logs.push(
       createLogEntry(
         `Juggernaut will deal ${effect.juggernautDamage} damage when you gain Block.`,
@@ -1136,7 +1264,7 @@ function resolveCardEffect(
   }
 
   if (effect.infernoDamage) {
-    combat.player.infernoDamage = effect.infernoDamage
+    setPlayerPower(combat, 'infernoDamage', effect.infernoDamage)
     logs.push(
       createLogEntry(
         `Inferno will burn all enemies for ${effect.infernoDamage} whenever you lose HP on your turn.`,
@@ -1146,7 +1274,7 @@ function resolveCardEffect(
   }
 
   if (effect.crimsonMantleBlock) {
-    combat.player.crimsonMantleBlock = effect.crimsonMantleBlock
+    setPlayerPower(combat, 'crimsonMantleBlock', effect.crimsonMantleBlock)
     logs.push(
       createLogEntry(
         `Crimson Mantle will cost 1 HP and grant ${effect.crimsonMantleBlock} Block at the start of each turn.`,
@@ -1301,7 +1429,8 @@ function needsTarget(definition: CardDefinition): boolean {
 }
 
 function dealDamageToEnemy(enemy: EnemyState, baseDamage: number): number {
-  const adjusted = enemy.vulnerable > 0 ? Math.floor(baseDamage * 1.5) : baseDamage
+  const adjusted =
+    getEnemyStatus(enemy, 'vulnerable') > 0 ? Math.floor(baseDamage * 1.5) : baseDamage
   const blocked = Math.min(enemy.block, adjusted)
   enemy.block -= blocked
   const hpDamage = adjusted - blocked
@@ -1314,14 +1443,28 @@ function dealDamageToPlayer(
   combat: CombatState,
   enemy: EnemyState,
   baseDamage: number,
+  logs: LogEntry[],
 ): number {
-  const withStrength = baseDamage + enemy.strength
-  const adjusted =
-    combat.player.vulnerable > 0 ? Math.floor(withStrength * 1.5) : withStrength
+  let adjusted = baseDamage + getEnemyPower(enemy, 'strength')
+  if (getEnemyStatus(enemy, 'weak') > 0) {
+    adjusted = Math.max(0, Math.floor(adjusted * 0.75))
+  }
+
+  if (getPlayerStatus(combat, 'vulnerable') > 0) {
+    adjusted = Math.floor(adjusted * 1.5)
+  }
+
   const blocked = Math.min(combat.player.block, adjusted)
   combat.player.block -= blocked
   const hpDamage = adjusted - blocked
   run.currentHp = Math.max(0, run.currentHp - hpDamage)
+  if (hpDamage > 0) {
+    triggerPlayerCombatEvent(run, combat, logs, 'loseHp', {
+      source: 'enemy',
+      amount: hpDamage,
+      duringPlayerTurn: false,
+    })
+  }
   return hpDamage
 }
 
@@ -1372,6 +1515,10 @@ function createCardInstance(cardId: CardId, index: number): CardInstance {
 
 function createEnemyState(enemyId: EnemyId, floor: number, index: number): EnemyState {
   const definition = enemyDefinitions[enemyId]
+  const enemyPowers = Object.fromEntries(ENEMY_POWER_KEYS.map((key) => [key, 0])) as Pick<
+    EnemyState,
+    EnemyPowerName
+  >
   return {
     instanceId: `enemy-${floor}-${index}`,
     definitionId: definition.id,
@@ -1379,14 +1526,68 @@ function createEnemyState(enemyId: EnemyId, floor: number, index: number): Enemy
     currentHp: definition.maxHp,
     maxHp: definition.maxHp,
     block: 0,
-    strength: 0,
-    ritual: 0,
+    ...enemyPowers,
     vulnerable: 0,
     weak: 0,
     intentIndex: 0,
     curlUpUsed: false,
     deathResolved: false,
   }
+}
+
+function getPlayerStatus(combat: CombatState, status: StatusName): number {
+  return combat.player[status]
+}
+
+function addPlayerStatus(combat: CombatState, status: StatusName, amount: number): number {
+  combat.player[status] = Math.max(0, combat.player[status] + amount)
+  return combat.player[status]
+}
+
+function getEnemyStatus(enemy: EnemyState, status: StatusName): number {
+  return enemy[status]
+}
+
+function addEnemyStatus(enemy: EnemyState, status: StatusName, amount: number): number {
+  enemy[status] = Math.max(0, enemy[status] + amount)
+  return enemy[status]
+}
+
+function multiplyEnemyStatus(enemy: EnemyState, status: StatusName, factor: number): number {
+  enemy[status] = Math.max(0, enemy[status] * factor)
+  return enemy[status]
+}
+
+function tickEntityStatuses<T extends { [K in StatusName]: number }>(
+  entity: T,
+  statuses: StatusName[],
+): void {
+  for (const status of statuses) {
+    entity[status] = tickDown(entity[status])
+  }
+}
+
+function getPlayerPower(combat: CombatState, power: PlayerPowerName): number {
+  return combat.player[power]
+}
+
+function setPlayerPower(combat: CombatState, power: PlayerPowerName, amount: number): number {
+  combat.player[power] = Math.max(0, amount)
+  return combat.player[power]
+}
+
+function addPlayerPower(combat: CombatState, power: PlayerPowerName, amount: number): number {
+  combat.player[power] = Math.max(0, combat.player[power] + amount)
+  return combat.player[power]
+}
+
+function getEnemyPower(enemy: EnemyState, power: EnemyPowerName): number {
+  return enemy[power]
+}
+
+function addEnemyPower(enemy: EnemyState, power: EnemyPowerName, amount: number): number {
+  enemy[power] = Math.max(0, enemy[power] + amount)
+  return enemy[power]
 }
 
 function getPlayerCardDamage(
@@ -1416,10 +1617,10 @@ function getPlayerCardDamage(
     strikeBonus +
     exhaustBonus +
     vulnerableBonus +
-    combat.player.strength +
-    combat.player.temporaryStrength
+    getPlayerPower(combat, 'strength') +
+    getPlayerPower(combat, 'temporaryStrength')
 
-  if (combat.player.weak > 0) {
+  if (getPlayerStatus(combat, 'weak') > 0) {
     return Math.max(0, Math.floor(total * 0.75))
   }
 
@@ -1454,13 +1655,46 @@ function pickRandomLivingEnemy(
   return livingEnemies[roll.index]
 }
 
-function moveCardToExhaust(combat: CombatState, card: CardInstance): void {
+function moveCardToExhaust(
+  run: RunState,
+  combat: CombatState,
+  card: CardInstance,
+  logs: LogEntry[],
+): void {
   combat.exhaustPile.push(card)
   combat.exhaustedThisTurn += 1
-  if (combat.player.feelNoPainBlock > 0) {
-    addPlayerBlock(combat, combat.player.feelNoPainBlock)
+  triggerPlayerCombatEvent(run, combat, logs, 'cardExhausted', {
+    source: 'system',
+    duringPlayerTurn: true,
+  })
+}
+
+function triggerPlayerCombatEvent(
+  run: RunState,
+  combat: CombatState,
+  logs: LogEntry[],
+  trigger: CombatTrigger,
+  context: TriggerContext,
+): void {
+  for (const powerName of PLAYER_POWER_KEYS) {
+    const value = getPlayerPower(combat, powerName)
+    if (value <= 0) {
+      continue
+    }
+
+    const handler = PLAYER_POWER_CONFIG[powerName].trigger?.[trigger]
+    if (!handler) {
+      continue
+    }
+
+    handler({
+      run,
+      combat,
+      logs,
+      value,
+      context,
+    })
   }
-  triggerDarkEmbrace(combat)
 }
 
 function handleStartOfTurnEffects(
@@ -1468,30 +1702,10 @@ function handleStartOfTurnEffects(
   combat: CombatState,
   logs: LogEntry[],
 ): void {
-  if (combat.player.crimsonMantleBlock > 0) {
-    losePlayerHp(run, combat, 1, logs, false)
-    addPlayerBlock(combat, combat.player.crimsonMantleBlock, run, logs)
-    logs.push(
-      createLogEntry(
-        `Crimson Mantle grants ${combat.player.crimsonMantleBlock} Block.`,
-        'good',
-      ),
-    )
-  }
-
-  if (combat.player.demonFormStrength > 0) {
-    combat.player.strength += combat.player.demonFormStrength
-    logs.push(
-      createLogEntry(
-        `Demon Form grants ${combat.player.demonFormStrength} Strength.`,
-        'good',
-      ),
-    )
-  }
-
-  if (combat.player.infernoDamage > 0) {
-    losePlayerHp(run, combat, 1, logs, false)
-  }
+  triggerPlayerCombatEvent(run, combat, logs, 'turnStart', {
+    source: 'power',
+    duringPlayerTurn: true,
+  })
 }
 
 function losePlayerHp(
@@ -1503,77 +1717,30 @@ function losePlayerHp(
 ): void {
   run.currentHp = Math.max(0, run.currentHp - amount)
   logs.push(createLogEntry(`You lose ${amount} HP.`, 'bad'))
-
-  if (fromCard && combat.player.ruptureStrength > 0) {
-    combat.player.strength += combat.player.ruptureStrength
-    logs.push(
-      createLogEntry(
-        `Rupture grants ${combat.player.ruptureStrength} Strength.`,
-        'good',
-      ),
-    )
-  }
-
-  if (combat.player.infernoDamage > 0) {
-    for (const enemy of combat.enemies.filter((candidate) => candidate.currentHp > 0)) {
-      const dealt = dealDamageToEnemy(enemy, combat.player.infernoDamage)
-      logs.push(
-        createLogEntry(
-          `Inferno burns ${enemy.name} for ${dealt} damage.`,
-          dealt > 0 ? 'good' : 'neutral',
-        ),
-      )
-      resolveEnemyAfterHit(combat, enemy, logs)
-    }
-  }
+  triggerPlayerCombatEvent(run, combat, logs, 'loseHp', {
+    source: fromCard ? 'card' : 'power',
+    amount,
+    duringPlayerTurn: true,
+  })
 }
 
 function addPlayerBlock(
   combat: CombatState,
   amount: number,
-  run?: RunState,
-  logs?: LogEntry[],
+  run: RunState,
+  logs: LogEntry[],
+  source: TriggerContext['source'] = 'card',
 ): void {
   combat.player.block += amount
-
-  if (combat.player.juggernautDamage > 0 && run && logs) {
-    const target = pickRandomLivingEnemy(run, combat)
-    if (target) {
-      const dealt = dealDamageToEnemy(target, combat.player.juggernautDamage)
-      logs.push(
-        createLogEntry(
-          `Juggernaut slams ${target.name} for ${dealt} damage.`,
-          dealt > 0 ? 'good' : 'neutral',
-        ),
-      )
-      resolveEnemyAfterHit(combat, target, logs)
-    }
-  }
-}
-
-function triggerDarkEmbrace(combat: CombatState): void {
-  if (combat.player.darkEmbraceDraw <= 0) {
-    return
-  }
-
-  for (let index = 0; index < combat.player.darkEmbraceDraw; index += 1) {
-    if (combat.drawPile.length === 0 && combat.discardPile.length === 0) {
-      break
-    }
-
-    if (combat.drawPile.length === 0) {
-      combat.drawPile = [...combat.discardPile]
-      combat.discardPile = []
-    }
-
-    const drawn = combat.drawPile.shift()
-    if (drawn) {
-      combat.hand.push(drawn)
-    }
-  }
+  triggerPlayerCombatEvent(run, combat, logs, 'gainBlock', {
+    source,
+    amount,
+    duringPlayerTurn: true,
+  })
 }
 
 function exhaustTopDrawPile(
+  run: RunState,
   combat: CombatState,
   count: number,
   logs: LogEntry[],
@@ -1584,7 +1751,7 @@ function exhaustTopDrawPile(
       break
     }
 
-    moveCardToExhaust(combat, topCard)
+    moveCardToExhaust(run, combat, topCard, logs)
     logs.push(
       createLogEntry(
         `${cardDefinitions[topCard.cardId].name} is exhausted from the top of your draw pile.`,
@@ -1620,7 +1787,7 @@ function playTopDrawPileAndExhaust(
   if (nestedPendingChoice) {
     logs.push(createLogEntry(`${definition.name}'s follow-up choice is skipped in Havoc.`, 'neutral'))
   }
-  moveCardToExhaust(combat, topCard)
+  moveCardToExhaust(run, combat, topCard, logs)
   logs.push(createLogEntry(`${definition.name} is exhausted.`, 'neutral'))
 }
 
@@ -1662,7 +1829,7 @@ function resolveEnemyDeaths(
     enemy.deathResolved = true
     const passive = enemyDefinitions[enemy.definitionId].passive
     if (passive?.onDeathApplyVulnerable) {
-      combat.player.vulnerable += passive.onDeathApplyVulnerable
+      addPlayerStatus(combat, 'vulnerable', passive.onDeathApplyVulnerable)
       logs.push(
         createLogEntry(
           `${enemy.name}'s spores apply ${passive.onDeathApplyVulnerable} Vulnerable to you.`,

@@ -64,6 +64,23 @@ export type EnemyId =
   | 'green-louse'
   | 'fungi-beast'
 export type StatusName = 'vulnerable' | 'weak'
+export type PlayerPowerName =
+  | 'strength'
+  | 'temporaryStrength'
+  | 'retaliateDamage'
+  | 'feelNoPainBlock'
+  | 'darkEmbraceDraw'
+  | 'ruptureStrength'
+  | 'demonFormStrength'
+  | 'juggernautDamage'
+  | 'infernoDamage'
+  | 'crimsonMantleBlock'
+export type EnemyPowerName = 'strength' | 'ritual'
+export type CombatTrigger =
+  | 'turnStart'
+  | 'loseHp'
+  | 'gainBlock'
+  | 'cardExhausted'
 export type Tone = 'neutral' | 'good' | 'bad'
 
 export type CardEffect = {

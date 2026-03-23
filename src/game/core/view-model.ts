@@ -8,12 +8,29 @@ import type {
   ActionButton,
   CardDefinition,
   CardInstance,
+  EnemyIntentDefinition,
+  EnemyState,
   GameState,
   Panel,
+  PlayerCombatState,
+  PlayerPowerName,
   ViewModel,
 } from '../types.ts'
 
 const MAX_ACTIONS = 9
+
+const PLAYER_POWER_DISPLAY: Array<{
+  key: PlayerPowerName
+  label: string
+}> = [
+  { key: 'feelNoPainBlock', label: 'Feel No Pain' },
+  { key: 'darkEmbraceDraw', label: 'Dark Embrace' },
+  { key: 'ruptureStrength', label: 'Rupture' },
+  { key: 'demonFormStrength', label: 'Demon Form' },
+  { key: 'juggernautDamage', label: 'Juggernaut' },
+  { key: 'infernoDamage', label: 'Inferno' },
+  { key: 'crimsonMantleBlock', label: 'Crimson Mantle' },
+]
 
 export function createViewModel(state: GameState): ViewModel {
   return {
@@ -172,21 +189,19 @@ function createMapPanel(state: GameState): Panel {
 
 function createCombatPanel(state: GameState): Panel {
   const combat = state.combat!
+  const activePowers = getActivePlayerPowerText(combat.player)
   return {
     id: 'combat',
     title: `Combat Turn ${combat.turn}`,
     lines: [
       `Energy ${combat.player.energy}/${combat.player.maxEnergy} | Strength ${combat.player.strength + combat.player.temporaryStrength} | Block ${combat.player.block} | Vulnerable ${combat.player.vulnerable} | Weak ${combat.player.weak} | Exhausted this turn ${combat.exhaustedThisTurn}`,
-      `Powers: Feel No Pain ${combat.player.feelNoPainBlock}, Dark Embrace ${combat.player.darkEmbraceDraw}, Rupture ${combat.player.ruptureStrength}, Demon Form ${combat.player.demonFormStrength}, Juggernaut ${combat.player.juggernautDamage}, Inferno ${combat.player.infernoDamage}, Crimson Mantle ${combat.player.crimsonMantleBlock}`,
+      activePowers,
       ...combat.enemies.map((enemy) => {
-        const intent =
-          enemy.currentHp > 0
-            ? enemyDefinitions[enemy.definitionId].intentCycle[enemy.intentIndex]?.label ?? 'Unknown'
-            : 'Defeated'
-        return `${enemy.name}: HP ${enemy.currentHp}/${enemy.maxHp}, Block ${enemy.block}, Strength ${enemy.strength}, Ritual ${enemy.ritual}, Vulnerable ${enemy.vulnerable}, Intent ${intent}`
+        const intent = enemy.currentHp > 0 ? formatEnemyIntent(enemy) : 'Defeated'
+        return `${enemy.name}: HP ${enemy.currentHp}/${enemy.maxHp}, Block ${enemy.block}, Strength ${enemy.strength}, Ritual ${enemy.ritual}, Vulnerable ${enemy.vulnerable}, Weak ${enemy.weak}, Intent ${intent}`
       }),
       `Draw ${combat.drawPile.length} | Discard ${combat.discardPile.length} | Exhaust ${combat.exhaustPile.length}`,
-    ],
+    ].filter(Boolean),
   }
 }
 
@@ -376,6 +391,63 @@ function actionLabelForCard(definition: CardDefinition): string {
   }
 
   return `Play ${definition.name}`
+}
+
+function getActivePlayerPowerText(player: PlayerCombatState): string {
+  const activePowers = PLAYER_POWER_DISPLAY
+    .filter(({ key }) => player[key] > 0)
+    .map(({ key, label }) => `${label} ${player[key]}`)
+
+  return activePowers.length > 0 ? `Powers: ${activePowers.join(', ')}` : ''
+}
+
+function formatEnemyIntent(enemy: EnemyState): string {
+  const intent = enemyDefinitions[enemy.definitionId].intentCycle[enemy.intentIndex]
+  if (!intent) {
+    return 'Unknown'
+  }
+
+  const actionLabel = intent.label.split(':')[0].split(' for ')[0]
+  const followUps: string[] = []
+  if (intent.block) {
+    followUps.push(`gain ${intent.block} Block`)
+  }
+
+  if (intent.applyVulnerable) {
+    followUps.push(`apply ${intent.applyVulnerable} Vulnerable`)
+  }
+
+  if (intent.applyWeak) {
+    followUps.push(`apply ${intent.applyWeak} Weak`)
+  }
+
+  if (intent.gainStrength) {
+    followUps.push(`gain ${intent.gainStrength} Strength`)
+  }
+
+  if (intent.gainRitual) {
+    followUps.push(`gain ${intent.gainRitual} Ritual`)
+  }
+
+  const lead =
+    intent.damage !== undefined
+      ? `${actionLabel} for ${getEnemyIntentDamage(enemy, intent)}`
+      : actionLabel
+
+  return followUps.length > 0 ? `${lead}; ${followUps.join(', ')}` : lead
+}
+
+function getEnemyIntentDamage(enemy: EnemyState, intent: EnemyIntentDefinition): number {
+  if (intent.damage === undefined) {
+    return 0
+  }
+
+  let damage = intent.damage + enemy.strength
+  if (enemy.weak > 0) {
+    damage = Math.max(0, Math.floor(damage * 0.75))
+  }
+
+  return damage
 }
 
 function formatCardLabel(card: CardInstance): string {
