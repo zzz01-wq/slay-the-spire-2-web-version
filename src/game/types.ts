@@ -336,11 +336,20 @@ export type Panel = {
   lines: string[]
 }
 
+export type InspectablePile = {
+  id: 'draw' | 'discard' | 'exhaust'
+  title: string
+  count: number
+  summary: string
+  lines: string[]
+}
+
 export type ViewModel = {
   title: string
   subtitle: string
   statusBadges: string[]
   panels: Panel[]
+  inspectablePiles: InspectablePile[]
   choicePanel: Panel | null
   log: LogEntry[]
   actions: ActionButton[]

@@ -11,6 +11,7 @@ import type {
   EnemyIntentDefinition,
   EnemyState,
   GameState,
+  InspectablePile,
   Panel,
   PlayerCombatState,
   PlayerPowerName,
@@ -38,6 +39,7 @@ export function createViewModel(state: GameState): ViewModel {
     subtitle: getSubtitle(state),
     statusBadges: getStatusBadges(state),
     panels: getPanels(state),
+    inspectablePiles: getInspectablePiles(state),
     choicePanel: getChoicePanel(state),
     log: [...state.ui.log].reverse(),
     actions: getActions(state),
@@ -216,6 +218,35 @@ function createHandPanel(hand: CardInstance[], energy: number): Panel {
             return `${formatCardLabel(card)}${locked}`
           })
         : ['Your hand is empty. End the turn to continue.'],
+  }
+}
+
+function getInspectablePiles(state: GameState): InspectablePile[] {
+  if (state.ui.screen !== 'combat' || !state.combat) {
+    return []
+  }
+
+  return [
+    createInspectablePile('draw', 'Draw Pile', state.combat.drawPile, true),
+    createInspectablePile('discard', 'Discard Pile', state.combat.discardPile, false),
+    createInspectablePile('exhaust', 'Exhaust Pile', state.combat.exhaustPile, false),
+  ]
+}
+
+function createInspectablePile(
+  id: InspectablePile['id'],
+  title: string,
+  cards: CardInstance[],
+  keepOrder: boolean,
+): InspectablePile {
+  const orderedCards = keepOrder ? [...cards] : [...cards].reverse()
+
+  return {
+    id,
+    title,
+    count: cards.length,
+    summary: cards.length > 0 ? orderedCards[0] ? `Top: ${formatCardLabel(orderedCards[0])}` : 'No cards.' : 'No cards.',
+    lines: cards.length > 0 ? orderedCards.map((card) => formatCardLabel(card)) : ['No cards.'],
   }
 }
 
