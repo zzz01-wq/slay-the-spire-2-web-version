@@ -12,14 +12,13 @@ import type {
   EnemyIntentDefinition,
   EnemyState,
   GameState,
+  HandCardViewModel,
   InspectablePile,
   Panel,
   PlayerCombatState,
   PlayerPowerName,
   ViewModel,
 } from '../types.ts'
-
-const MAX_ACTIONS = 9
 
 const PLAYER_POWER_DISPLAY: Array<{
   key: PlayerPowerName
@@ -41,9 +40,9 @@ export function createViewModel(state: GameState): ViewModel {
     statusBadges: getStatusBadges(state),
     panels: getPanels(state),
     combatSummary: getCombatSummary(state),
+    handCards: getHandCards(state),
     inspectablePiles: getInspectablePiles(state),
     choicePanel: getChoicePanel(state),
-    log: [...state.ui.log].reverse(),
     actions: getActions(state),
   }
 }
@@ -97,10 +96,6 @@ function getPanels(state: GameState): Panel[] {
 
   if (state.ui.screen === 'map' && state.run) {
     panels.push(createMapPanel(state))
-  }
-
-  if (state.ui.screen === 'combat' && state.run && state.combat) {
-    panels.push(createHandPanel(state.combat.hand, state.combat.player.energy))
   }
 
   if (state.ui.screen === 'reward' && state.rewards) {
@@ -190,20 +185,6 @@ function createMapPanel(state: GameState): Panel {
   }
 }
 
-function createHandPanel(hand: CardInstance[], energy: number): Panel {
-  return {
-    id: 'hand',
-    title: 'Hand',
-    lines:
-      hand.length > 0
-        ? hand.map((card) => {
-            const locked = getDisplayedCost(card) > energy ? ' [not enough energy]' : ''
-            return `${formatCardLabel(card)}${locked}`
-          })
-        : ['Your hand is empty. End the turn to continue.'],
-  }
-}
-
 function getInspectablePiles(state: GameState): InspectablePile[] {
   if (state.ui.screen !== 'combat' || !state.combat) {
     return []
@@ -231,6 +212,43 @@ function createInspectablePile(
     summary: cards.length > 0 ? orderedCards[0] ? `Top: ${formatCardLabel(orderedCards[0])}` : 'No cards.' : 'No cards.',
     lines: cards.length > 0 ? orderedCards.map((card) => formatCardLabel(card)) : ['No cards.'],
   }
+}
+
+function getHandCards(state: GameState): HandCardViewModel[] {
+  if (state.ui.screen !== 'combat' || !state.combat) {
+    return []
+  }
+
+  return state.combat.hand.map((card) => {
+    const definition = cardDefinitions[card.cardId]
+    const cost = getDisplayedCost(card)
+    const disabled = cost > state.combat!.player.energy
+    const targets = needsEnemyTarget(definition)
+      ? state.combat!.enemies
+          .filter((enemy) => enemy.currentHp > 0)
+          .map((enemy) => ({
+            enemyId: enemy.instanceId,
+            enemyName: enemy.name,
+          }))
+      : []
+
+    return {
+      instanceId: card.instanceId,
+      name: `${definition.name}${card.upgraded ? '+' : ''}`,
+      cost,
+      description: card.upgraded ? definition.upgradedDescription : definition.description,
+      disabled,
+      disabledReason: disabled ? 'Not enough energy.' : undefined,
+      targetMode: definition.effect.randomTarget
+        ? 'random'
+        : definition.effect.damageAll !== undefined
+          ? 'all'
+          : needsEnemyTarget(definition)
+            ? 'enemy'
+            : 'none',
+      targets,
+    }
+  })
 }
 
 function getCombatSummary(state: GameState): CombatSummary | null {
@@ -372,39 +390,7 @@ function getCombatActions(state: GameState): ActionButton[] {
   if (!state.combat) {
     return []
   }
-
-  const actions: ActionButton[] = []
-
-  for (const card of state.combat.hand.slice(0, MAX_ACTIONS)) {
-    const definition = cardDefinitions[card.cardId]
-    const disabled = getDisplayedCost(card) > state.combat.player.energy
-
-    if (needsEnemyTarget(definition)) {
-      for (const enemy of state.combat.enemies.filter((target) => target.currentHp > 0)) {
-        actions.push({
-          id: `${card.instanceId}-${enemy.instanceId}`,
-          label: `Play ${definition.name} on ${enemy.name}`,
-          action: {
-            type: 'PLAY_CARD',
-            cardInstanceId: card.instanceId,
-            targetEnemyId: enemy.instanceId,
-          },
-          disabled,
-        })
-      }
-      continue
-    }
-
-    actions.push({
-      id: card.instanceId,
-      label: actionLabelForCard(definition),
-      action: { type: 'PLAY_CARD', cardInstanceId: card.instanceId },
-      disabled,
-    })
-  }
-
-  actions.push({ id: 'end-turn', label: 'End Turn', action: { type: 'END_TURN' } })
-  return actions
+  return [{ id: 'end-turn', label: 'End Turn', action: { type: 'END_TURN' } }]
 }
 
 function getRewardActions(state: GameState): ActionButton[] {
@@ -429,18 +415,6 @@ function needsEnemyTarget(definition: CardDefinition): boolean {
 
   return definition.type === 'attack' && !definition.effect.randomTarget
     && definition.effect.damageAll === undefined
-}
-
-function actionLabelForCard(definition: CardDefinition): string {
-  if (definition.effect.randomTarget) {
-    return `Play ${definition.name} (random target)`
-  }
-
-  if (definition.effect.damageAll !== undefined) {
-    return `Play ${definition.name} (all enemies)`
-  }
-
-  return `Play ${definition.name}`
 }
 
 function getActivePlayerPowerText(player: PlayerCombatState): string {

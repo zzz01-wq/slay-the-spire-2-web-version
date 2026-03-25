@@ -29,8 +29,15 @@ type ParsedCardLine = {
 
 export function GameScreen({ viewModel, dispatch }: GameScreenProps) {
   const [openPileId, setOpenPileId] = useState<InspectablePile['id'] | null>(null)
+  const [selectedHandCardId, setSelectedHandCardId] = useState<string | null>(null)
   const openPile =
     viewModel.inspectablePiles.find((pile) => pile.id === openPileId) ?? null
+  const selectedHandCard =
+    viewModel.handCards.find((card) => card.instanceId === selectedHandCardId) ?? null
+  const combatEndTurnAction =
+    viewModel.combatSummary
+      ? viewModel.actions.find((action) => action.action.type === 'END_TURN') ?? null
+      : null
 
   return (
     <main className="game-shell">
@@ -94,23 +101,6 @@ export function GameScreen({ viewModel, dispatch }: GameScreenProps) {
             </section>
           ) : null}
 
-          {viewModel.inspectablePiles.length > 0 ? (
-            <section className="pile-strip" aria-label="Combat piles">
-              {viewModel.inspectablePiles.map((pile) => (
-                <button
-                  className="pile-card"
-                  key={pile.id}
-                  onClick={() => setOpenPileId(pile.id)}
-                  type="button"
-                >
-                  <span className="pile-card__title">{pile.title}</span>
-                  <span className="pile-card__count">{pile.count}</span>
-                  <span className="pile-card__summary">{pile.summary}</span>
-                </button>
-              ))}
-            </section>
-          ) : null}
-
           {viewModel.panels.map((panel) => (
             <article className="panel" key={panel.id}>
               <h2>{panel.title}</h2>
@@ -120,6 +110,69 @@ export function GameScreen({ viewModel, dispatch }: GameScreenProps) {
         </div>
 
         <aside className="side-column">
+          {viewModel.inspectablePiles.length > 0 ? (
+            <section className="action-panel">
+              <h2>Combat Piles</h2>
+              <section className="pile-strip pile-strip--sidebar" aria-label="Combat piles">
+                {viewModel.inspectablePiles.map((pile) => (
+                  <button
+                    className="pile-card"
+                    key={pile.id}
+                    onClick={() => setOpenPileId(pile.id)}
+                    type="button"
+                  >
+                    <span className="pile-card__title">{pile.title}</span>
+                    <span className="pile-card__count">{pile.count}</span>
+                    <span className="pile-card__summary">{pile.summary}</span>
+                  </button>
+                ))}
+              </section>
+            </section>
+          ) : null}
+
+          {viewModel.handCards.length > 0 ? (
+            <section className="action-panel hand-panel">
+              <div className="hand-panel__header">
+                <h2>Hand</h2>
+                {combatEndTurnAction ? (
+                  <button
+                    className="action-button action-button--end-turn"
+                    disabled={combatEndTurnAction.disabled}
+                    onClick={() => dispatch(combatEndTurnAction.action)}
+                    type="button"
+                  >
+                    {combatEndTurnAction.label}
+                  </button>
+                ) : null}
+              </div>
+              <div className="hand-grid hand-grid--sidebar">
+                {viewModel.handCards.map((card) => (
+                  <button
+                    className={`hand-card ${card.disabled ? 'is-disabled' : ''}`}
+                    key={card.instanceId}
+                    onClick={() => setSelectedHandCardId(card.instanceId)}
+                    type="button"
+                  >
+                    <span className="card-line">
+                      <span className="card-line__header">
+                        <span className="card-line__name">{card.name}</span>
+                        <span className="card-line__cost">
+                          <img
+                            alt="Energy cost"
+                            className="card-line__cost-icon"
+                            src={stS2EnergyIroncladIcon}
+                          />
+                          <span>{card.cost}</span>
+                        </span>
+                      </span>
+                      <span className="card-line__description">{card.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {viewModel.choicePanel ? (
             <section className="action-panel">
               <h2>{viewModel.choicePanel.title}</h2>
@@ -127,33 +180,24 @@ export function GameScreen({ viewModel, dispatch }: GameScreenProps) {
             </section>
           ) : null}
 
-          <section className="log-panel">
-            <h2>Battle Log</h2>
-            <ul>
-              {viewModel.log.map((entry) => (
-                <li className={`log-entry ${entry.tone}`} key={entry.id}>
-                  {entry.message}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="action-panel">
-            <h2>Available Actions</h2>
-            <div className="action-grid">
-              {viewModel.actions.map((action) => (
-                <button
-                  className="action-button"
-                  disabled={action.disabled}
-                  key={action.id}
-                  onClick={() => dispatch(action.action)}
-                  type="button"
-                >
-                  {action.label}
-                </button>
-              ))}
-            </div>
-          </section>
+          {!viewModel.combatSummary ? (
+            <section className="action-panel">
+              <h2>Available Actions</h2>
+              <div className="action-grid">
+                {viewModel.actions.map((action) => (
+                  <button
+                    className="action-button"
+                    disabled={action.disabled}
+                    key={action.id}
+                    onClick={() => dispatch(action.action)}
+                    type="button"
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </aside>
       </section>
 
@@ -185,6 +229,95 @@ export function GameScreen({ viewModel, dispatch }: GameScreenProps) {
                 </li>
               ))}
             </ul>
+          </section>
+        </div>
+      ) : null}
+
+      {selectedHandCard ? (
+        <div
+          aria-modal="true"
+          className="pile-modal-backdrop"
+          onClick={() => setSelectedHandCardId(null)}
+          role="dialog"
+        >
+          <section className="pile-modal hand-action-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="pile-modal__header">
+              <div>
+                <h2>{selectedHandCard.name}</h2>
+                <p>{selectedHandCard.description}</p>
+              </div>
+              <button
+                className="pile-modal__close"
+                onClick={() => setSelectedHandCardId(null)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="hand-action-modal__body">
+              <div className="hand-action-modal__cost">
+                <img
+                  alt="Energy cost"
+                  className="card-line__cost-icon"
+                  src={stS2EnergyIroncladIcon}
+                />
+                <span>{selectedHandCard.cost}</span>
+              </div>
+
+              {selectedHandCard.disabled ? (
+                <p className="hand-action-modal__hint">{selectedHandCard.disabledReason}</p>
+              ) : null}
+
+              <div className="hand-action-modal__actions">
+                {selectedHandCard.targetMode === 'enemy'
+                  ? selectedHandCard.targets.map((target) => (
+                      <button
+                        className="action-button"
+                        key={target.enemyId}
+                        onClick={() => {
+                          dispatch({
+                            type: 'PLAY_CARD',
+                            cardInstanceId: selectedHandCard.instanceId,
+                            targetEnemyId: target.enemyId,
+                          })
+                          setSelectedHandCardId(null)
+                        }}
+                        type="button"
+                      >
+                        Play on {target.enemyName}
+                      </button>
+                    ))
+                  : (
+                    <button
+                      className="action-button"
+                      disabled={selectedHandCard.disabled}
+                      onClick={() => {
+                        dispatch({
+                          type: 'PLAY_CARD',
+                          cardInstanceId: selectedHandCard.instanceId,
+                        })
+                        setSelectedHandCardId(null)
+                      }}
+                      type="button"
+                    >
+                      {selectedHandCard.targetMode === 'all'
+                        ? 'Play on all enemies'
+                        : selectedHandCard.targetMode === 'random'
+                          ? 'Play with random target'
+                          : 'Play card'}
+                    </button>
+                    )}
+
+                <button
+                  className="action-button action-button--secondary"
+                  onClick={() => setSelectedHandCardId(null)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </section>
         </div>
       ) : null}

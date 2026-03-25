@@ -366,14 +366,30 @@ export type CombatSummary = {
   enemies: CombatEnemySummary[]
 }
 
+export type HandCardTargetOption = {
+  enemyId: string
+  enemyName: string
+}
+
+export type HandCardViewModel = {
+  instanceId: string
+  name: string
+  cost: number
+  description: string
+  disabled: boolean
+  disabledReason?: string
+  targetMode: 'none' | 'enemy' | 'random' | 'all'
+  targets: HandCardTargetOption[]
+}
+
 export type ViewModel = {
   title: string
   subtitle: string
   statusBadges: string[]
   panels: Panel[]
   combatSummary: CombatSummary | null
+  handCards: HandCardViewModel[]
   inspectablePiles: InspectablePile[]
   choicePanel: Panel | null
-  log: LogEntry[]
   actions: ActionButton[]
 }
