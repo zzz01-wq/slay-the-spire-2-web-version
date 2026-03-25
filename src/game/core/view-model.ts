@@ -8,6 +8,7 @@ import type {
   ActionButton,
   CardDefinition,
   CardInstance,
+  CombatSummary,
   EnemyIntentDefinition,
   EnemyState,
   GameState,
@@ -39,6 +40,7 @@ export function createViewModel(state: GameState): ViewModel {
     subtitle: getSubtitle(state),
     statusBadges: getStatusBadges(state),
     panels: getPanels(state),
+    combatSummary: getCombatSummary(state),
     inspectablePiles: getInspectablePiles(state),
     choicePanel: getChoicePanel(state),
     log: [...state.ui.log].reverse(),
@@ -98,7 +100,6 @@ function getPanels(state: GameState): Panel[] {
   }
 
   if (state.ui.screen === 'combat' && state.run && state.combat) {
-    panels.push(createCombatPanel(state))
     panels.push(createHandPanel(state.combat.hand, state.combat.player.energy))
   }
 
@@ -189,24 +190,6 @@ function createMapPanel(state: GameState): Panel {
   }
 }
 
-function createCombatPanel(state: GameState): Panel {
-  const combat = state.combat!
-  const activePowers = getActivePlayerPowerText(combat.player)
-  return {
-    id: 'combat',
-    title: `Combat Turn ${combat.turn}`,
-    lines: [
-      `Energy ${combat.player.energy}/${combat.player.maxEnergy} | Strength ${combat.player.strength + combat.player.temporaryStrength} | Block ${combat.player.block} | Vulnerable ${combat.player.vulnerable} | Weak ${combat.player.weak} | Exhausted this turn ${combat.exhaustedThisTurn}`,
-      activePowers,
-      ...combat.enemies.map((enemy) => {
-        const intent = enemy.currentHp > 0 ? formatEnemyIntent(enemy) : 'Defeated'
-        return `${enemy.name}: HP ${enemy.currentHp}/${enemy.maxHp}, Block ${enemy.block}, Strength ${enemy.strength}, Ritual ${enemy.ritual}, Vulnerable ${enemy.vulnerable}, Weak ${enemy.weak}, Intent ${intent}`
-      }),
-      `Draw ${combat.drawPile.length} | Discard ${combat.discardPile.length} | Exhaust ${combat.exhaustPile.length}`,
-    ].filter(Boolean),
-  }
-}
-
 function createHandPanel(hand: CardInstance[], energy: number): Panel {
   return {
     id: 'hand',
@@ -247,6 +230,42 @@ function createInspectablePile(
     count: cards.length,
     summary: cards.length > 0 ? orderedCards[0] ? `Top: ${formatCardLabel(orderedCards[0])}` : 'No cards.' : 'No cards.',
     lines: cards.length > 0 ? orderedCards.map((card) => formatCardLabel(card)) : ['No cards.'],
+  }
+}
+
+function getCombatSummary(state: GameState): CombatSummary | null {
+  if (state.ui.screen !== 'combat' || !state.combat) {
+    return null
+  }
+
+  const combat = state.combat
+  const activePowers = getActivePlayerPowerText(combat.player)
+
+  return {
+    turn: combat.turn,
+    playerStats: [
+      { key: 'energy', label: 'Energy', value: `${combat.player.energy}/${combat.player.maxEnergy}` },
+      { key: 'strength', label: 'Strength', value: combat.player.strength + combat.player.temporaryStrength },
+      { key: 'block', label: 'Block', value: combat.player.block },
+      { key: 'vulnerable', label: 'Vulnerable', value: combat.player.vulnerable },
+      { key: 'weak', label: 'Weak', value: combat.player.weak },
+      { key: 'exhausted', label: 'Exhausted', value: combat.exhaustedThisTurn },
+    ],
+    powersText: activePowers,
+    enemies: combat.enemies.map((enemy) => ({
+      id: enemy.instanceId,
+      name: enemy.name,
+      currentHp: enemy.currentHp,
+      maxHp: enemy.maxHp,
+      intent: enemy.currentHp > 0 ? formatEnemyIntent(enemy) : 'Defeated',
+      stats: [
+        { key: 'block', label: 'Block', value: enemy.block },
+        { key: 'strength', label: 'Strength', value: enemy.strength },
+        { key: 'ritual', label: 'Ritual', value: enemy.ritual },
+        { key: 'vulnerable', label: 'Vulnerable', value: enemy.vulnerable },
+        { key: 'weak', label: 'Weak', value: enemy.weak },
+      ],
+    })),
   }
 }
 

@@ -61,6 +61,92 @@
   padding: 18px;
 }
 
+.combat-summary {
+  display: grid;
+  gap: 18px;
+}
+
+.combat-summary__powers {
+  margin: 14px 0 0;
+  color: var(--text-soft);
+}
+
+.enemy-summary-list {
+  display: grid;
+  gap: 14px;
+}
+
+.enemy-summary-card {
+  padding: 14px;
+  border: 1px solid rgba(240, 195, 146, 0.1);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.enemy-summary-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-bright);
+  margin-bottom: 12px;
+}
+
+.enemy-summary-card__intent {
+  margin-top: 12px;
+  color: var(--text-soft);
+}
+
+.stat-token-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.stat-token {
+  min-width: 94px;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 12px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(240, 195, 146, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.stat-token--enemy {
+  min-width: 82px;
+  padding: 10px 8px;
+}
+
+.stat-token__icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.32));
+}
+
+.stat-token__fallback {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 181, 107, 0.16);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.stat-token__value {
+  color: var(--text-bright);
+  font-weight: 700;
+}
+
+.stat-token__label {
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
 .pile-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -132,6 +218,44 @@
 
 .panel li {
   color: var(--text-soft);
+}
+
+.card-line {
+  display: grid;
+  gap: 6px;
+}
+
+.card-line__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-line__name {
+  color: var(--text-bright);
+  font-weight: 600;
+}
+
+.card-line__cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-bright);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.card-line__cost-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+
+.card-line__description {
+  color: var(--text-soft);
+  font-size: 0.95rem;
 }
 
 .side-column {
@@ -287,5 +411,9 @@
 
   .pile-strip {
     grid-template-columns: 1fr;
+  }
+
+  .enemy-summary-card__header {
+    flex-direction: column;
   }
 }

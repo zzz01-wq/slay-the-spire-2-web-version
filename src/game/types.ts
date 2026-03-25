@@ -344,11 +344,34 @@ export type InspectablePile = {
   lines: string[]
 }
 
+export type CombatStatToken = {
+  key: string
+  label: string
+  value: number | string
+}
+
+export type CombatEnemySummary = {
+  id: string
+  name: string
+  currentHp: number
+  maxHp: number
+  intent: string
+  stats: CombatStatToken[]
+}
+
+export type CombatSummary = {
+  turn: number
+  playerStats: CombatStatToken[]
+  powersText: string
+  enemies: CombatEnemySummary[]
+}
+
 export type ViewModel = {
   title: string
   subtitle: string
   statusBadges: string[]
   panels: Panel[]
+  combatSummary: CombatSummary | null
   inspectablePiles: InspectablePile[]
   choicePanel: Panel | null
   log: LogEntry[]
